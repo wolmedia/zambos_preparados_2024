@@ -238,7 +238,7 @@ def validar_creacion_usuario(identificacion, telefono, correo, departamento):
         return (
             jsonify(
                 {
-                    "error": "El registro no pudo ser completado, esta identificación ya está en uso."
+                    "error": "El registro no pudo ser completado, este telefono ya está en uso."
                 }
             ),
             409,
