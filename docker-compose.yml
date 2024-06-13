@@ -1,0 +1,11 @@
+services:
+  app:
+    build:
+      context: ./app
+    environment:
+      - DATABASE_URL=mysql+pymysql://zambos-preparados:z4mb0s2024!@wordpress.cmibrcpgydkn.us-east-1.rds.amazonaws.com:3306/zambos_preparados_2024
+      - SECRET_KEY=ZAMBOSPREPARADOS
+    volumes:
+      - ./app:/app
+    ports:
+      - "5199:5199"
