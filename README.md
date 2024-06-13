@@ -11,7 +11,7 @@ Para ejecutar este proyecto, sigue los siguientes pasos:
 Clona el repositorio de GitHub en tu máquina local:
 
 ```bash
-git clone [https://github.com/oscarwol/zambos_preparados_2024](https://github.com/oscarwol/zambos_preparados_2024)
+git clone https://github.com/oscarwol/zambos_preparados_2024
 cd zambos_preparados_2024
 ```
 
@@ -19,7 +19,7 @@ cd zambos_preparados_2024
 
 Este proyecto utiliza SQLAlchemy como un ORM para Flask. Al ejecutar el proyecto, todos los modelos se migrarán automáticamente a la base de datos configurada. No es necesario crear la base de datos manualmente.
 
-Para configurar la base de datos, abre el archivo `Docker-compose.yml` y configura la URL de la base de datos siguiendo el formato:
+Para configurar la base de datos, abre el archivo `docker-compose.yml` y configura la URL de la base de datos siguiendo el formato:
 
 ```yaml
 "DATABASE_URL=mysql+pymysql://usuario:contraseña@servidor:puerto/base_de_datos"
@@ -34,7 +34,7 @@ Asegúrate de seguir la nomenclatura de datos proporcionada a continuación:
 
 ## 🚀 Iniciar el Proyecto
 
-Una vez que hayas clonado el repositorio y configurado la base de datos en el archivo `Docker-compose.yml`, puedes iniciar el proyecto ejecutando el siguiente comando:
+Una vez que hayas clonado el repositorio y configurado la base de datos en el archivo `docker-compose.yml`, puedes iniciar el proyecto ejecutando el siguiente comando:
 
 ```bash
 docker-compose up --build
@@ -61,6 +61,9 @@ localhost:5199 (Local)
 | `POST` | /votar | Permite sumar o restar una votación a una id_Galeria específica, cada usuario puede votar una única vez y la suma o resta dependerá del estado que se envie|
 
 
+<details>
+<summary>Endpoint '/login'</summary>
+
 #### Endpoint Login [/login]
 ```http
 POST /zambos-preparados/login/
@@ -73,8 +76,12 @@ Ejemplos de datos a enviar:
   "correo": "omorales@wol.group"
 }
 ```
+</details>
+
 ---
 
+<details>
+<summary>Endpoint '/register'</summary>
 
 ### Endpoint Register: [/register]
 ```http
@@ -96,9 +103,13 @@ Ejemplos de datos a enviar:
 }
 
 ```
----
+</details>
 
-#### Endpoint new_galeria [/zambos-preparados/new_galeria] (Subir foto a Galeria)
+---
+<details>
+<summary>Endpoint '/new_galeria'</summary>
+
+#### Endpoint new_galeria [/zambos-preparados/new_galeria] (Subir a Galeria)
 ```http
 POST /zambos-preparados/new_galeria/
 ```
@@ -113,9 +124,11 @@ Ejemplos de datos a enviar (Debe ser un POST):
     "tipo": "reel"
 }
 ```
-```
+</details>
 
 ---
+<details>
+<summary>Endpoint '/galeria'</summary>
 
 #### Endpoint Galeria [/zambos-preparados/galeria] (Galeria)
 ```http
@@ -162,7 +175,11 @@ Este endpoint también permite ver resultados específicos por cada página
     "token": "b21vcmFsZXNAb2RkLmRpZ2l0YWw="
 }
 ```
+</details>
+
 ---
+<details>
+<summary>Endpoint '/votar'</summary>
 
 #### Endpoint de Votación [/zambos-preparados/votar] 
 ```http
@@ -179,5 +196,7 @@ Ejemplos de datos a enviar:
     "estado: 1
 }
 ```
+</details>
+
 ---
 
