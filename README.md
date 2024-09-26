@@ -55,10 +55,10 @@ localhost:5199 (Local)
 | `POST` | /register | Nos permite registrar un nuevo usuario en el sistema, retorna un token |
 | `POST` | /register_visita | Endpoint para registrar al usuario de visita|
 | `GET` | /departamento | Retorna el listado total de los departamentos registrados|
-| `POST` | /new_galeria | Sube una nueva foto al sistema, la guarda en la base de datos  |
 | `POST` | /galeria | Obtiene los elementos con aprobacion, en estado activo y retorna su conteo de votaciones, además si el usuario logeado ya votó por esta foto o no.|
 | `GET` | /galeria_usuario/<int:user_id> | Obtiene las fotos en estado activo de un usuario en especifico|
 | `POST` | /votar | Permite sumar o restar una votación a una id_Galeria específica, cada usuario puede votar una única vez y la suma o resta dependerá del estado que se envie|
+| `POST` | /new_image | Sube una nueva foto al sistema, la guarda en la base de datos  |
 
 
 #### Endpoint Login [/login]
@@ -98,19 +98,18 @@ Ejemplos de datos a enviar:
 ```
 ---
 
-#### Endpoint new_galeria [/zambos-preparados/new_galeria] (Subir foto a Galeria)
+#### Endpoint new_galeria [/zambos-preparados/new_image] (Subir foto a Galeria)
 ```http
 POST /zambos-preparados/new_galeria/
 ```
 
-Ejemplos de datos a enviar (Debe ser un POST):
+Ejemplos de datos a enviar (Debe ser un POST FORM):
 ```
 {
     "id_usuario": 30475,
-    "plataforma": "Instagram",
-    "codigo": "C48ybrQv5QH/",
+    "image": imagen.png,
     "url": "https://www.instagram.com/reel/C48ybrQv5QH/",
-    "tipo": "reel"
+    "tipo": "imagen"
 }
 ```
 ```

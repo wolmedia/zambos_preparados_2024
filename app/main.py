@@ -1,12 +1,16 @@
 from flask import Flask, request, jsonify
 import os
+from PIL import Image
 import io
+import base64
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from flask_marshmallow import Marshmallow
 import re
 import base64
 from datetime import datetime, timedelta
+import requests
+from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 app.app_context().push()
@@ -17,7 +21,14 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL")
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY")
 
+# Carpeta donde almacenar las imágenes
+UPLOAD_FOLDER = 'static/uploads/'
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
+# Asegúrate de que la carpeta existe
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
+    
 db = SQLAlchemy(app)
 ma = Marshmallow(app)
 base = db.Model.metadata.reflect(db.engine)
@@ -73,8 +84,6 @@ class Galeria(db.Model):
     def __init__(
         self,
         id_usuario,
-        plataforma,
-        codigo,
         url,
         fecha_registro,
         fecha_eliminacion,
@@ -83,8 +92,6 @@ class Galeria(db.Model):
     ):
         self.id_usuario = id_usuario
         self.url = url
-        self.plataforma = plataforma  
-        self.codigo = codigo
         self.fecha_registro = fecha_registro
         self.fecha_eliminacion = fecha_eliminacion
         self.estado = estado,
@@ -123,8 +130,6 @@ class Galeria_Schema(ma.Schema):
         fields = (
             "id",
             "id_usuario",
-            "plataforma",
-            "codigo,"
             "url",
             "fecha_publicacion",
             "estado",
@@ -186,6 +191,7 @@ def get_id_by_token(id_token):
 def validar_dato(dato, tipo):
     if tipo == "nombre":
         newdato = re.sub(r"[^A-Za-z-ÁáÉéÍíÓóÚúñÑ ]", "", dato).upper()
+        newdato = re.sub(r'\s+', ' ', newdato).rstrip()
     if tipo == "identificacion":
         newdato = re.sub(r"[^A-Za-z-0-9]+", "", dato).upper()
     if tipo == "numerico":
@@ -238,7 +244,7 @@ def validar_creacion_usuario(identificacion, telefono, correo, departamento):
         return (
             jsonify(
                 {
-                    "error": "El registro no pudo ser completado, esta identificación ya está en uso."
+                    "error": "El registro no pudo ser completado, este telefono ya está en uso."
                 }
             ),
             409,
@@ -261,20 +267,19 @@ def validar_creacion_usuario(identificacion, telefono, correo, departamento):
     return False  # El usuario no existe, pasa la validación
 
 
+
 def calcular_edad(identificacion):
     try:
+        # Extraer el año de nacimiento de la identificación
+        anio_nacimiento = int(identificacion[4:8])
+
+        # Obtener el año actual
         fecha_actual = datetime.now()
         anio_actual = fecha_actual.year
-        # Tomar los dos últimos dígitos del año de nacimiento
-        anio_nacimiento = int(identificacion[7:9])
 
-        # Asumir que el año de nacimiento es del siglo pasado si es mayor a la edad actual
-        if anio_nacimiento > anio_actual % 100:
-            anio_nacimiento += 1900
-        else:
-            anio_nacimiento += 2000
-
+        # Calcular la edad
         edad = anio_actual - anio_nacimiento
+
         return edad
     except:
         return 0
@@ -314,6 +319,14 @@ def nuevo_usuario():
                 ),
                 400,
             )
+            
+        if edad < 18:
+            return (
+                    jsonify(
+                        {"error": "El registro no pudo ser completado porque el usuario es menor de edad"}
+                    ),
+                    400,
+                )
 
         validacion = validar_creacion_usuario(
             identificacion, telefono, correo, departamento
@@ -568,55 +581,76 @@ def is_active(token):
 
 
 
+def is_shortened_url(url):
+    original_url_pattern = re.compile(r'^https://www\.tiktok\.com/@[^/]+/video/\d+$')
+    # Si la URL no coincide con el patrón de la URL original, se considera acortada
+    return not original_url_pattern.match(url)
 
-@app.route(host + "/new_galeria", methods=["POST"])
-def new_total_Galeria():
+def expand_url(short_url):
     try:
-        data = request.get_json()
+        response = requests.get(short_url, allow_redirects=True)
+        return response.url
+    except requests.RequestException as e:
+        print(f"Error al expandir la URL: {e}")
+        return short_url
 
-        id_usuario = request.json["id_usuario"]
-        plataforma = request.json["plataforma"]
-        codigo = request.json["codigo"]
-        url = request.json["url"]
-        tipo = request.json["tipo"]
-        fecha_registro = datetime.now()
-        estado = 1
-        fecha_eliminacion = None
+def extract_video_id(expanded_url):
+    # Expresión regular para capturar el video_id de una URL expandida de TikTok
+    match = re.search(r'https://www\.tiktok\.com/@[^/]+/video/(\d+)', expanded_url)
+    if match:
+        return match.group(1)
+    return None
 
-        if not all(
-            [
-                id_usuario,
-                plataforma,
-                codigo,
-                url,
-                tipo,
-            ]
-        ):
-            return (
-                jsonify(
-                    {"error": "El registro no pudo ser completado campos incompletos "}
-                ),
-                400,
-            )
-        nueva_galeria = Galeria(id_usuario=id_usuario,plataforma=plataforma,codigo=codigo,url=url,fecha_registro=fecha_registro, estado=estado, fecha_eliminacion=fecha_eliminacion, tipo=tipo)
-        db.session.add(nueva_galeria)
-        db.session.commit()
+
+@app.route(host + "/new_image", methods=["POST"])
+def detect_image():
+    id_usuario = request.form.get("id_usuario")
+    tipo = request.form.get("tipo")
+    url = request.form.get("url")
+    fecha_registro = datetime.now()
+    fecha_eliminacion = None
+
+    if not all([id_usuario, tipo]):
         return (
             jsonify(
-                {
-                    "message": "Datos ingresados exitosamente"
-                }
+                {"error": "El registro no pudo ser completado, campos incompletos"}
             ),
-            201,
-        ) 
-            
-    except Exception as e:
-        return jsonify(message="Error en la solicitud"), 500
+            400,
+        )
 
+    current_user = Usuarios.query.filter(Usuarios.id == id_usuario).first()
+    if not current_user or not verificar_estado_activacion(current_user.correo):
+        return jsonify({"error": "Este usuario no existe o está deshabilitado"}), 401
 
+    image_file = request.files.get("image")
 
+    if not image_file:
+        return jsonify({"error": "No se proporcionó un archivo de imagen"}), 400
 
+    # Convertir la imagen a base64 sin guardarla en el servidor
+    img = Image.open(image_file)
 
+    # Convertir la imagen a bytes en formato JPEG o PNG
+    img_byte_array = io.BytesIO()
+    img.save(img_byte_array, format='PNG')  # Puedes usar 'PNG' si es necesario
+    img_byte_array.seek(0)
+
+    # Convertir los bytes a base64
+    img_base64 = base64.b64encode(img_byte_array.read()).decode('utf-8')
+
+    # Guardar en la base de datos si es necesario
+    nueva_galeria = Galeria(id_usuario=id_usuario, url=url, fecha_registro=fecha_registro, estado=1, fecha_eliminacion=fecha_eliminacion, tipo=tipo)
+    db.session.add(nueva_galeria)
+    db.session.commit()
+
+    return jsonify(
+        {
+            "image_base64": img_base64,
+            'tipo': tipo,
+            "url": url,
+            "message": "Imagen procesada correctamente en base64",
+        }
+    )
 
 
 @app.route(host + "/galeria_admin", methods=["GET"])
@@ -656,7 +690,7 @@ def get_total_Galeria_admin():
  
 @app.route(host + "/galeria", methods=["POST"])
 def get_total_Galeria():
-    try:
+    if True:
         data = request.get_json()
 
         # Leer parámetros del cuerpo JSON con valores predeterminados
@@ -673,17 +707,18 @@ def get_total_Galeria():
 
 
         if fecha_inicio is not None and fecha_fin is not None:
+            fecha_inicio_dt = datetime.strptime(fecha_inicio, "%Y-%m-%d")
+            fecha_fin_dt = datetime.strptime(fecha_fin, "%Y-%m-%d") + timedelta(days=1)
+            
             # Filtrar por rango de fechas si se proporcionan ambas fechas
             base_query = base_query.filter(
-                Galeria.fecha_publicacion.between(fecha_inicio, fecha_fin)
+                Galeria.fecha_registro.between(fecha_inicio_dt, fecha_fin_dt)
             )
 
         galery = base_query.paginate(page=page, per_page=per_page)
 
         if galery.items:
             galeria_data = []
-            print(galery.items)
-
             for g in galery.items:
                 current_user = Usuarios.query.get(g.id_usuario)
                 votaciones_galeria = Votaciones.count_votaciones_for_galeria(g.id)
@@ -704,7 +739,7 @@ def get_total_Galeria():
                         "usuario_voto_logeado": tiene_votaciones,
                         "tipo": g.tipo,
                         "plataforma": g.plataforma,
-                        "codigo": g.codigo
+                        "codigo": g.codigo,
                     }
                 )
 
@@ -722,8 +757,8 @@ def get_total_Galeria():
 
         return jsonify(message="No hay resultados"), 404
 
-    except Exception as e:
-        return jsonify(message="No hay resultados"), 404
+    # except Exception as e:
+    #     return jsonify(message="No hay resultados"), 500
 
 
 @app.route(host + "/votar", methods=["POST"])
@@ -836,13 +871,25 @@ def get_galeria_usuario(user_id):
 
 
 
-
-@app.route(host + "/galeria_usuario_publica/<id_token>", methods=["GET"])
-def get_galeria_usuario_publica(id_token):
+@app.route(host + "/galeria_usuario_publica", methods=["POST"])
+def get_galeria_usuario_publica():
     try:
+        id_token = request.json["id_token"]
+        usuario_id = request.json["usuario_id"]
+        if not usuario_id:
+            return (
+                jsonify(
+                    message="No se proporciono usuario"
+                ),
+                409,
+            )
+            
+        if not usuario_id == -1:
+            current_user_vista = Usuarios.query.filter_by(id=usuario_id).first()
+
         user_id = get_id_by_token(id_token)
-        print(user_id)
-        current_user = Usuarios.query.filter_by(correo=user_id).first()
+        
+        current_user = Usuarios.query.filter_by(id=user_id).first()
         if not current_user:
             return (
                 jsonify(
@@ -859,12 +906,17 @@ def get_galeria_usuario_publica(id_token):
 
         if galerias:
             galeria_data = []
+            user_data = []
 
             for galeria in galerias:
                 votaciones_galeria = Votaciones.count_votaciones_for_galeria(galeria.id)
-                tiene_votaciones = current_user.tiene_votaciones_para_galeria(
-                    galeria.id
-                )
+                if current_user_vista:
+                    tiene_votaciones = current_user_vista.tiene_votaciones_para_galeria(
+                        galeria.id
+                    )
+                else:
+                    tiene_votaciones = False
+
 
                 galeria_data.append(
                     {
@@ -881,7 +933,13 @@ def get_galeria_usuario_publica(id_token):
                     }
                 )
 
-            result = {"data": galeria_data}
+
+            user_data.append(
+                    {"nombre": current_user.nombre,
+                    "apellido": current_user.apellido,                    
+                     }
+                )
+            result = {"data": galeria_data, "usuario": user_data}
             return jsonify(result), 200
         else:
             return (
@@ -893,6 +951,145 @@ def get_galeria_usuario_publica(id_token):
 
     except Exception as e:
         return jsonify(message="Error en la solicitud"), 500
+
+@app.route(host + "/completar_register", methods=["POST"])
+def completar_register_visita():
+    try:
+
+        nombre = str(validar_dato(request.json["nombre"], "nombre")).upper()
+        apellido = str(validar_dato(request.json["apellido"], "nombre")).upper()
+        identificacion = validar_dato(request.json["identificacion"], "identificacion")
+        correo = str(request.json["correo"]).lower()
+        telefono = int(validar_dato(request.json["telefono"], "numerico"))
+        departamento = request.json["departamento"]
+        genero = request.json["genero"]
+        edad = calcular_edad(identificacion)
+        ip_address = request.json["ip"]
+        estado = 1
+        tipo_usuario = 1
+        
+
+        if not all(
+            [
+                nombre,
+                apellido,
+                identificacion,
+                correo,
+                telefono,
+                departamento,
+                genero,
+                edad,
+            ]
+        ):
+            return (
+                jsonify(
+                    {"error": "El registro no pudo ser completado campos incompletos "}
+                ),
+                400,
+            )
+        if edad < 18:
+            return (
+                    jsonify(
+                        {"error": "El registro no pudo ser completado porque el usuario es menor de edad"}
+                    ),
+                    400,
+                )
+            
+        current_user = Usuarios.query.filter_by(correo=correo, estado=1, tipo_usuario=2
+        ).first()
+        if not current_user:
+            return (
+                jsonify(
+                    {"error": "El registro no pudo ser completado, el usuario no es usuario visitante "}
+                ),
+                400,
+            )
+
+
+        validacion = validar_creacion_usuario(
+            identificacion, telefono, "-1", departamento
+        )
+        if not validacion:
+            current_user.nombre = nombre
+            current_user.apellido = apellido
+            current_user.telefono = telefono
+            current_user.identificacion = identificacion
+            current_user.id_departamento = departamento
+            current_user.genero = genero
+            current_user.edad = edad
+            current_user.ip_address = ip_address
+            current_user.estado = estado
+            current_user.tipo_usuario = tipo_usuario
+            db.session.commit()
+            return (
+                jsonify(
+                    {
+                        "message": "Datos de usuario actualizados exitosamente",
+                        "token": current_user.token,
+                    }
+                ),
+                201,
+            )
+        else:
+            return validacion
+    except KeyError as e:
+        response = jsonify(
+            {
+                "error": "El registro no pudo ser completado, hace falta el campo "
+                + str(e)
+            }
+        )
+        response.status_code = 400
+        return response
+    except Exception as ex:
+        response = jsonify(
+            {"error": "El registro no pudo ser completado, intenta nuevamente. Error: " + str(ex)}
+        )
+        response.status_code = 500
+        return response
+
+
+
+@app.route(host + "/aprobar", methods=["POST"])
+def aprobaciones():
+    admin_token = "YWRtaW5AbW9zY2EuY29vbA=="
+    data = request.get_json()
+    id_galeria = data.get("id_galeria")
+    aprobacion = data.get("aprobacion")
+    token = data.get("token")
+    # Validación de entrada
+    if id_galeria is None or aprobacion is None:
+        return jsonify({"message": "Datos de entrada incompletos."}), 400
+
+    galeria_foto = Galeria.query.filter_by(id=id_galeria).first()
+    if not galeria_foto:
+        return jsonify({"message": "Datos de galeria incorrectos."}), 404
+    if aprobacion == 0:
+        if token != admin_token:
+            return jsonify({"message": "Error de token"}), 400
+
+        galeria_foto.estado = 0
+        msg = f"Foto de galeria {galeria_foto.id} deshabilitada correctamente"
+    elif aprobacion == 2:
+        usuario_token = Usuarios.query.filter_by(token=token).first()
+        if (usuario_token and galeria_foto.id_usuario == usuario_token.id) or token == admin_token :
+            galeria_foto.estado = 2
+            galeria_foto.fecha_eliminacion = datetime.now()
+            msg = f"Foto de galeria {galeria_foto.id} eliminada correctamente"
+        else:
+            return jsonify({"message": "Esta foto no pertenece a este usuario"}), 400
+
+    else:
+        if token != admin_token:
+            return jsonify({"message": "Error de token"}), 400
+
+        galeria_foto.estado = 1
+        msg = f"Foto de galeria {galeria_foto.id} habilitada correctamente"
+
+    db.session.commit()
+
+    return jsonify({"message": msg}), 200
+
 
 
 if __name__ == "__main__":
