@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify
+from google.cloud import vision
 import os
 from PIL import Image
 import io
@@ -33,6 +34,7 @@ db = SQLAlchemy(app)
 ma = Marshmallow(app)
 base = db.Model.metadata.reflect(db.engine)
 
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "credentials.json"
 
 class Usuarios(db.Model):
     __table__ = db.Model.metadata.tables["usuarios"]
@@ -46,7 +48,7 @@ class Usuarios(db.Model):
         telefono,
         genero,
         edad,
-        id_departamento,
+        departamento,
         token,
         ip_address,
         utms,        
@@ -61,7 +63,7 @@ class Usuarios(db.Model):
         self.telefono = telefono
         self.genero = genero
         self.edad = edad
-        self.id_departamento = id_departamento
+        self.departamento = departamento
         self.token = token
         self.utms = utms
         self.ip_address = ip_address
@@ -200,20 +202,6 @@ def validar_dato(dato, tipo):
 
 
 def validar_creacion_usuario(identificacion, telefono, correo, departamento):
-    departamento_obj = Departamentos.query.filter_by(id=departamento).first()
-
-    if not departamento_obj:
-        return (
-            jsonify(
-                {
-                    "error": "El registro no pudo ser completado, Este departamento no existe"
-                }
-            ),
-            409,
-        )
-
-    pais_id = departamento_obj.id_pais
-
     # Verificar si la identificación ya está en uso
     user_by_identificacion = Usuarios.query.filter_by(
         identificacion=identificacion
@@ -256,11 +244,11 @@ def validar_creacion_usuario(identificacion, telefono, correo, departamento):
 
     # Validar teléfono y identificación según el país
     if not re.match(telefono_regex, str(telefono)):
-        return jsonify({"error": f"El teléfono no pertenece al país {pais_id}"}), 409
+        return jsonify({"error": f"El teléfono no pertenece al país"}), 409
 
     if not re.match(identificacion_regex, str(identificacion)):
         return (
-            jsonify({"error": f"La identificación no pertenece al país {pais_id}"}),
+            jsonify({"error": f"La identificación no pertenece al país"}),
             409,
         )
 
@@ -334,7 +322,7 @@ def nuevo_usuario():
         if not validacion:
             token = generate_token(correo)
             nuevo_usurio = Usuarios(
-                nombre=nombre, apellido=apellido,identificacion=identificacion,correo=correo,telefono=telefono,genero=genero,edad=edad,id_departamento=departamento,token=token,ip_address=ip_address,utms=utms,fecha_registro=fecha_registro,tipo_usuario=tipo_usuario,estado=estado
+                nombre=nombre, apellido=apellido,identificacion=identificacion,correo=correo,telefono=telefono,genero=genero,edad=edad,departamento=departamento,token=token,ip_address=ip_address,utms=utms,fecha_registro=fecha_registro,tipo_usuario=tipo_usuario,estado=estado
             )
             db.session.add(nuevo_usurio)
             db.session.commit()
@@ -504,13 +492,6 @@ def login():
             identificacion=identificacion, correo=correo
         ).first()
         if user:
-            depa = Departamentos.query.filter_by(id=user.id_departamento).first()
-            if not depa:
-                return (
-                    jsonify({"message": "El usuario no tiene un departamento valido"}),
-                    404,
-                )
-
             response = jsonify(
                 {
                     "mensaje": "Login exitoso",
@@ -526,8 +507,7 @@ def login():
                         "telefono": user.telefono,
                         "genero": user.genero,
                         "edad": user.edad,
-                        "departamento": depa.id,
-                        "departamento_name": depa.nombre
+                        "departamento": user.departamento,
                         },
                 }
             )
@@ -606,7 +586,6 @@ def extract_video_id(expanded_url):
 def detect_image():
     id_usuario = request.form.get("id_usuario")
     tipo = request.form.get("tipo")
-    url = request.form.get("url")
     fecha_registro = datetime.now()
     fecha_eliminacion = None
 
@@ -626,27 +605,108 @@ def detect_image():
 
     if not image_file:
         return jsonify({"error": "No se proporcionó un archivo de imagen"}), 400
+    
+    client = vision.ImageAnnotatorClient()
+
+    # Leer el contenido de la imagen
+    image_content = image_file.read()
+    image = vision.Image(content=image_content)
+
+    # Detección de etiquetas (Label Detection)
+    labels_response = client.label_detection(image=image)
+    labels = labels_response.label_annotations
+
+    # Lista de etiquetas relacionadas con comida
+    food_labels = ["food", "dish", "meal", "drink", "beverage", "fruit", "vegetable", "recipe", "ingredient"]
+
+    actions = []
+    detected_labels = []
+    food_detected = False
+
+    # Comprobar si alguna de las etiquetas está relacionada con comida
+    for label in labels:
+        label_description = label.description.lower()
+        detected_labels.append(label_description)  # Guardar las etiquetas detectadas
+
+        # Si alguna etiqueta se relaciona con comida, marcamos food_detected como True
+        if any(food in label_description for food in food_labels):
+            food_detected = True
+        else:
+            actions.append(f"Imagen contiene {label_description}")
+
+    # Si se detecta comida, marcar estado 1, de lo contrario estado 0
+    if food_detected:
+        estado = 1
+    else:
+        actions.append("La imagen no contiene comida")
+        estado = 0
+
+    # Detección de contenido seguro (SafeSearch)
+    safe_search_response = client.safe_search_detection(image=image)
+    safe_search = safe_search_response.safe_search_annotation
+
+    # Mapea los valores de clasificación a términos más descriptivos
+    safe_search_labels = {
+        vision.Likelihood.UNKNOWN: "Desconocido",
+        vision.Likelihood.VERY_UNLIKELY: "Muy improbable",
+        vision.Likelihood.UNLIKELY: "Improbable",
+        vision.Likelihood.POSSIBLE: "Posible",
+        vision.Likelihood.LIKELY: "Probable",
+        vision.Likelihood.VERY_LIKELY: "Muy probable",
+    }
+
+    classification = {
+        "adulto": safe_search_labels[safe_search.adult],
+        "engañoso": safe_search_labels[safe_search.spoof],
+        "médico": safe_search_labels[safe_search.medical],
+        "violencia": safe_search_labels[safe_search.violence],
+        "picante": safe_search_labels[safe_search.racy],
+    }
+
+    # Acciones basadas en contenido no deseado
+    if classification["adulto"] in ["Posible", "Probable", "Muy probable"]:
+        actions.append("Imagen contiene contenido adulto")
+
+    if classification["picante"] in ["Posible", "Probable", "Muy probable"]:
+        actions.append("Imagen contiene contenido picante")
+
+    if classification["violencia"] in ["Posible", "Probable", "Muy probable"]:
+        actions.append("Imagen contiene contenido violento")
+
+    url = (
+        str(id_usuario)
+        + "_"
+        + "_"
+        + str(datetime.now().strftime("%Y%m%d_%H%M%S"))
+        + ".jpg"
+    )
 
     # Convertir la imagen a base64 sin guardarla en el servidor
-    img = Image.open(image_file)
-
-    # Convertir la imagen a bytes en formato JPEG o PNG
+    img = Image.open(io.BytesIO(image_content))
     img_byte_array = io.BytesIO()
-    img.save(img_byte_array, format='PNG')  # Puedes usar 'PNG' si es necesario
+    img.save(img_byte_array, format='PNG')
     img_byte_array.seek(0)
-
-    # Convertir los bytes a base64
     img_base64 = base64.b64encode(img_byte_array.read()).decode('utf-8')
 
-    # Guardar en la base de datos si es necesario
-    nueva_galeria = Galeria(id_usuario=id_usuario, url=url, fecha_registro=fecha_registro, estado=1, fecha_eliminacion=fecha_eliminacion, tipo=tipo)
+    # Guardar en la base de datos
+    nueva_galeria = Galeria(
+        id_usuario=id_usuario, 
+        url=url, 
+        fecha_registro=fecha_registro, 
+        estado=estado, 
+        fecha_eliminacion=fecha_eliminacion, 
+        tipo=tipo
+    )
     db.session.add(nueva_galeria)
     db.session.commit()
 
+    # Respuesta JSON con las etiquetas detectadas y las acciones
     return jsonify(
         {
             "image_base64": img_base64,
             'tipo': tipo,
+            "actions": actions,
+            "detected_labels": detected_labels,  # Etiquetas detectadas
             "url": url,
             "message": "Imagen procesada correctamente en base64",
         }
