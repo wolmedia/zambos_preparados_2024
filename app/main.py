@@ -12,6 +12,7 @@ import base64
 from datetime import datetime, timedelta
 import requests
 from werkzeug.utils import secure_filename
+import tinify  # TinyPNG module
 
 app = Flask(__name__)
 app.app_context().push()
@@ -35,6 +36,8 @@ ma = Marshmallow(app)
 base = db.Model.metadata.reflect(db.engine)
 
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "credentials.json"
+
+tinify.key = "HSxvJcJyDw5zMMWJzC8s77XgrRzBFMVR"
 
 class Usuarios(db.Model):
     __table__ = db.Model.metadata.tables["usuarios"]
@@ -605,11 +608,18 @@ def detect_image():
 
     if not image_file:
         return jsonify({"error": "No se proporcionó un archivo de imagen"}), 400
-    
-    client = vision.ImageAnnotatorClient()
 
-    # Leer el contenido de la imagen
-    image_content = image_file.read()
+    # Optimize image with Tinify
+    try:
+        cnt = image_file.read()
+        source = tinify.from_buffer(cnt).to_buffer()
+        image_content = source
+        if image_content is None:
+            return jsonify({"error": "Error al comprimir la imagen"}), 500
+    except tinify.Error as e:
+        return jsonify({"error": f"Error al comprimir la imagen: {str(e)}"}), 500
+
+    client = vision.ImageAnnotatorClient()
     image = vision.Image(content=image_content)
 
     # Detección de etiquetas (Label Detection)
