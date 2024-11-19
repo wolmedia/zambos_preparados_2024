@@ -12,7 +12,15 @@ import base64
 from datetime import datetime, timedelta
 import requests
 from werkzeug.utils import secure_filename
+import gspread
 import tinify  # TinyPNG module
+from google.oauth2.service_account import Credentials
+import schedule
+import time
+from datetime import datetime
+import threading
+
+
 
 app = Flask(__name__)
 app.app_context().push()
@@ -173,7 +181,7 @@ def activar_token_usuario(token):
     if usuario:
         if verificar_estado_activacion(usuario.correo):
             return "Este usuario ya fue activado previamente", 404
-        usuario.fecha_activacion = datetime.now()
+        usuario.fecha_activacion = datetime.now() - timedelta(hours=6)
         usuario.estado = 1
         db.session.commit()
         return f"Usuario {usuario.correo} activado correctamente", 200
@@ -288,7 +296,7 @@ def nuevo_usuario():
         genero = request.json["genero"]
         edad = calcular_edad(identificacion)
         ip_address = request.json["ip"]
-        fecha_registro = datetime.now()
+        fecha_registro = datetime.now() - timedelta(hours=6)
         estado = 1
         tipo_usuario = 1
 
@@ -370,7 +378,7 @@ def nuevo_usuario_visitante():
         departamento = None
         genero = None
         edad = None
-        fecha_registro = datetime.now()
+        fecha_registro = datetime.now() - timedelta(hours=6)
         estado = 1
         identificacion = None
         ip_address = request.json["ip"]
@@ -589,7 +597,7 @@ def extract_video_id(expanded_url):
 def detect_image():
     id_usuario = request.form.get("id_usuario")
     tipo = request.form.get("tipo")
-    fecha_registro = datetime.now()
+    fecha_registro = datetime.now() - timedelta(hours=6)
     fecha_eliminacion = None
 
     if not all([id_usuario, tipo]):
@@ -741,12 +749,9 @@ def get_total_Galeria_admin():
                     "id": g.id,
                     "id_usuario": g.id_usuario,
                     "url": g.url,
-                    "plataforma": g.plataforma,
-                    "codigo": g.codigo,
                     "tipo": g.tipo,
                     "fecha_registro": g.fecha_registro,
                     "estado": g.estado,
-
                 }
             )
 
@@ -808,8 +813,6 @@ def get_total_Galeria():
                         "fecha_publicacion": g.fecha_registro,
                         "usuario_voto_logeado": tiene_votaciones,
                         "tipo": g.tipo,
-                        "plataforma": g.plataforma,
-                        "codigo": g.codigo,
                     }
                 )
 
@@ -859,12 +862,12 @@ def votar():
                     409,
                 )
             existing_vote.estado = 1
-            existing_vote.fecha_modificacion = datetime.now()
+            existing_vote.fecha_modificacion = datetime.now() - timedelta(hours=6)
         else:
             nueva_votacion = Votaciones(
                 id_galeria=id_galeria,
                 id_usuario=usuario_token.id,
-                fecha_registro=datetime.now(),
+                fecha_registro=datetime.now() - timedelta(hours=6),
                 estado=1,
                 fecha_modificacion=None,
             )
@@ -873,7 +876,7 @@ def votar():
     elif estado == 0:
         if existing_vote:
             existing_vote.estado = 0
-            existing_vote.fecha_modificacion = datetime.now()
+            existing_vote.fecha_modificacion = datetime.now() - timedelta(hours=6)
 
             db.session.commit()
 
@@ -920,9 +923,6 @@ def get_galeria_usuario(user_id):
                         "votaciones": votaciones_galeria,
                         "usuario_voto_logeado": tiene_votaciones,
                         "tipo": galeria.tipo,
-                        "plataforma": galeria.plataforma,
-                        "codigo": galeria.codigo
-
                     }
                 )
 
@@ -998,8 +998,6 @@ def get_galeria_usuario_publica():
                         "votaciones": votaciones_galeria,
                         "usuario_voto_logeado": tiene_votaciones,
                         "tipo": galeria.tipo,
-                        "plataforma": galeria.plataforma,
-                        "codigo": galeria.codigo
                     }
                 )
 
@@ -1144,7 +1142,7 @@ def aprobaciones():
         usuario_token = Usuarios.query.filter_by(token=token).first()
         if (usuario_token and galeria_foto.id_usuario == usuario_token.id) or token == admin_token :
             galeria_foto.estado = 2
-            galeria_foto.fecha_eliminacion = datetime.now()
+            galeria_foto.fecha_eliminacion = datetime.now() - timedelta(hours=6)
             msg = f"Foto de galeria {galeria_foto.id} eliminada correctamente"
         else:
             return jsonify({"message": "Esta foto no pertenece a este usuario"}), 400
@@ -1161,6 +1159,193 @@ def aprobaciones():
     return jsonify({"message": msg}), 200
 
 
+@app.route(host + "/registrar-reel", methods=["POST"])
+def registrar_reel():
+    data = request.get_json()
+    nombre = data.get("nombre")
+    apellido = data.get("apellido")
+    instagram_link = data.get("instagram_link")
+
+    if not all([nombre, apellido, instagram_link]):
+        return jsonify({"message": "Datos de entrada incompletos."}), 400
+    
+
+    # Create a new user
+    nuevo_usuario = Usuarios(
+        nombre=nombre.upper(),
+        apellido=apellido.upper(),
+        identificacion=None,
+        correo=None,
+        telefono=None,
+        genero=None,
+        edad=None,
+        departamento=None,
+        token=None,
+        ip_address=None,
+        utms=None,
+        fecha_registro=datetime.now() - timedelta(hours=6),
+        tipo_usuario=4,
+        estado=1,
+    )
+    db.session.add(nuevo_usuario)
+    db.session.commit()
+
+    # Add the Instagram link to the Galeria table
+    nueva_galeria = Galeria(
+        id_usuario=nuevo_usuario.id,
+        url=instagram_link,
+        fecha_registro=datetime.now() - timedelta(hours=6),
+        fecha_eliminacion=None,
+        estado=1,
+        tipo="Instagram",
+    )
+    db.session.add(nueva_galeria)
+    db.session.commit()
+
+    return jsonify({"message": "Reel registrado correctamente.", "user_id": nuevo_usuario.id, "galeria_id": nueva_galeria.id}), 201
+
+
+def spreadsheet_v2():
+    with app.app_context(): 
+        try:
+            # Autenticación de Google Sheets
+            scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+            creds = Credentials.from_service_account_file("key-spreadsheet.json", scopes=scopes)
+            client = gspread.authorize(creds)
+
+            # Acceso al Google Spreadsheet
+            sheet_id = "1PygHsgkbDbQlW211MwhJ9j82GQ75Geh-vCrweTFn82U"
+            workbook = client.open_by_key(sheet_id)
+            sheet = workbook.get_worksheet(0)
+
+            # Leer la cabecera desde la primera fila para usarla como claves
+            header = sheet.row_values(1)
+            
+            # Obtener el último usuario de tipo 3 (Whatsapp) registrado en la base de datos
+            ultimo_usuario = Usuarios.query.filter_by(tipo_usuario=3).order_by(Usuarios.fecha_registro.desc()).first()
+
+            # Leer todas las filas de datos desde la segunda fila (saltando la cabecera)
+            data = sheet.get_all_values()[1:]
+
+            # Convertir las filas en un diccionario con base en la cabecera
+            data_as_dict = [dict(zip(header, row)) for row in data]
+
+            # Si no hay registros previos, incluir todos los registros
+            if not ultimo_usuario:
+                nuevos_registros = data_as_dict
+            else:
+                # Convertir fecha_registro a cadena en formato completo de fecha y hora para comparación
+                last_user_date = ultimo_usuario.fecha_registro.strftime("%Y-%m-%d %H:%M:%S")
+                last_user_email = ultimo_usuario.correo.strip()
+
+                # Recorrer el spreadsheet desde el final hasta el inicio
+                nuevos_registros = []
+                for item in reversed(data_as_dict):
+                    # Normalizar fecha y correo
+                    fecha = item.get("Fecha de creación", "").strip()
+                    correo = item.get("Email", "").strip()
+
+                    # Normalizar las fechas para que tengan el mismo formato de 24 horas con ceros a la izquierda
+                    normalized_fecha = normalize_date(fecha)
+                    normalized_last_user_date = normalize_date(last_user_date)
+
+                    # Si encontramos el último registro, dejamos de añadir elementos
+                    if normalized_fecha == normalized_last_user_date and correo == last_user_email:
+                        break
+                    
+                    # Agregar a nuevos_registros solo si no se encontró el último registro aún
+                    nuevos_registros.insert(0, item)  # Añadir al inicio para mantener el orden
+
+            # Preparar los datos para insertar en la base de datos
+            data_db = [
+                {
+                    "nombre": item.get("Nombre del concursante", ""),
+                    "apellido": " ",
+                    "identificacion": item.get("Número de identificación", ""),
+                    "correo": item.get("Email", ""),
+                    "telefono": item.get("Número de teléfono del concursante", ""),
+                    "genero": item.get("Género", ""),
+                    "edad": item.get("Edad", ""),
+                    "departamento": item.get("Departamento", ""),
+                    "token": None,
+                    "ip_address": None,
+                    "utms": None,
+                    "fecha_registro": item.get("Fecha de creación", ""),
+                    "tipo_usuario": 3,
+                    "estado": 1,
+                    "img_url": item.get("URL de imagen adjunta", ""),
+                }
+                for item in nuevos_registros
+            ]
+
+            # Validar si el array data_db está vacío
+            if not data_db:
+                return jsonify({"message": "No hay nuevos registros para insertar."}), 200
+
+            # Registrar los datos en la base de datos
+            for item in data_db:
+                nuevo_usurio = Usuarios(
+                    nombre=item["nombre"],
+                    apellido=item["apellido"],
+                    identificacion=item["identificacion"],
+                    correo=item["correo"],
+                    telefono=item["telefono"],
+                    genero=item["genero"],
+                    edad=item["edad"],
+                    departamento=item["departamento"],
+                    token=item["token"],
+                    ip_address=item["ip_address"],
+                    utms=item["utms"],
+                    fecha_registro=item["fecha_registro"],
+                    tipo_usuario=item["tipo_usuario"],
+                    estado=item["estado"],
+                )
+                db.session.add(nuevo_usurio)
+                db.session.commit()
+
+                # Guardar la imagen en la galería
+                nueva_galeria = Galeria(
+                    id_usuario=nuevo_usurio.id,
+                    url=item["img_url"],
+                    fecha_registro=datetime.now() - timedelta(hours=6),
+                    fecha_eliminacion=None,
+                    estado=1,
+                    tipo="Whatsapp",
+                )
+                db.session.add(nueva_galeria)
+                db.session.commit()
+
+            return jsonify(data_db), 200
+
+        except Exception as e:
+            return jsonify({"message": str(e)}), 500
+
+# Función para normalizar las fechas en formato "YYYY-MM-DD HH:MM:SS"
+def normalize_date(date_str):
+    try:
+        # Intentamos convertir la fecha en un formato estandarizado
+        normalized_date = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+        return normalized_date.strftime("%Y-%m-%d %H:%M:%S")  # Asegurarnos que tiene el formato esperado
+    except ValueError:
+        # Si la fecha no tiene el formato correcto, devolverla tal como está
+        return date_str
+    
+schedule.every(1).hours.do(spreadsheet_v2)
+
+def run_schedule():
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
+
+
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", debug=True, port=5199)
+    # Iniciar un hilo para ejecutar las tareas programadas
+    schedule_thread = threading.Thread(target=run_schedule)
+    schedule_thread.start()
+
+    # Iniciar el servidor Flask
+    app.run(host="0.0.0.0", debug=True, port=5199, use_reloader=False)
+
+
+
